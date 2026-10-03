@@ -1,0 +1,25 @@
+# Mac system files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Temp processing files
+temp/
+
+# Test video outputs (large files)
+tests/output/*.mp4
+
+# Audio files (large, sourced externally)
+tracks/*.mp3
+tests/*.wav
+
+# Final video outputs
+output/*.mp4
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Analysis JSON (generated, not source)
+analysis/*.json
