@@ -12,12 +12,17 @@ ANALYSIS_DIR = os.path.join(BASE_DIR, "analysis")
 TRACK  = os.path.join(TRACKS_DIR,   "energetic_01.mp3")
 OUTPUT = os.path.join(ANALYSIS_DIR, "energetic_01_analysis.json")
 
+# Minimum onset threshold for subdivision points
+# Only eighth/sixteenth notes where actual audio content exists are generated
+# Downbeats are always included — structurally determined by Madmom
+MIN_ONSET_THRESHOLD = 3.0  # out of 100 normalized
+
 print("\n" + "═"*50)
-print("  AdVids — Deep Track Analysis v1.1")
+print("  AdVids — Deep Track Analysis v1.2")
 print("═"*50)
 
 # ─────────────────────────────────────────────────
-# LAYER 1A — Load audio
+# STEP 1 — Load audio
 # ─────────────────────────────────────────────────
 print("\n[1] Loading audio...")
 y, sr = librosa.load(TRACK)
@@ -26,25 +31,25 @@ print(f"    Duration    : {round(duration, 2)}s")
 print(f"    Sample rate : {sr}Hz")
 
 # ─────────────────────────────────────────────────
-# LAYER 1B — Tempo + beats (Madmom)
+# STEP 2 — Detect tempo + beats (Madmom)
 # ─────────────────────────────────────────────────
 print("\n[2] Detecting tempo and beats (Madmom)...")
-proc = madmom.features.beats.RNNBeatProcessor()
+proc       = madmom.features.beats.RNNBeatProcessor()
 beat_times = madmom.features.beats.BeatTrackingProcessor(fps=100)(proc(TRACK))
 beat_times = [round(float(b), 3) for b in beat_times]
 
-intervals = np.diff(beat_times)
-bpm = round(float(60.0 / np.median(intervals)), 1)
+intervals    = np.diff(beat_times)
+bpm          = round(float(60.0 / np.median(intervals)), 1)
 beat_duration = round(float(np.median(intervals)), 4)
-print(f"    BPM         : {bpm}")
-print(f"    Beats found : {len(beat_times)}")
+print(f"    BPM          : {bpm}")
+print(f"    Beats found  : {len(beat_times)}")
 print(f"    Beat duration: {beat_duration}s")
 
 # ─────────────────────────────────────────────────
-# LAYER 1C — Downbeats + bar boundaries (Madmom)
+# STEP 3 — Detect downbeats + bar boundaries (Madmom)
 # ─────────────────────────────────────────────────
 print("\n[3] Detecting downbeats and bars (Madmom)...")
-dproc = madmom.features.downbeats.RNNDownBeatProcessor()
+dproc  = madmom.features.downbeats.RNNDownBeatProcessor()
 dbproc = madmom.features.downbeats.DBNDownBeatTrackingProcessor(
     beats_per_bar=[3, 4], fps=100
 )
@@ -52,24 +57,24 @@ downbeat_data = dbproc(dproc(TRACK))
 
 downbeats = []
 for entry in downbeat_data:
-    time = round(float(entry[0]), 3)
+    time     = round(float(entry[0]), 3)
     position = int(entry[1])
     if position == 1:
         downbeats.append(time)
 
-# Build bars
+# Build bars from consecutive downbeats
 bars = []
 for i in range(len(downbeats)):
     bar_start = downbeats[i]
-    bar_end = downbeats[i+1] if i+1 < len(downbeats) else round(duration, 3)
+    bar_end   = downbeats[i+1] if i+1 < len(downbeats) else round(duration, 3)
     bars.append({
-        "bar": i + 1,
-        "start": bar_start,
-        "end": bar_end,
+        "bar":      i + 1,
+        "start":    bar_start,
+        "end":      bar_end,
         "duration": round(bar_end - bar_start, 3)
     })
 
-# Time signature
+# Detect time signature from beats per bar
 beats_per_bar_list = []
 for i in range(len(downbeats) - 1):
     beats_in_bar = sum(
@@ -80,46 +85,17 @@ for i in range(len(downbeats) - 1):
         beats_per_bar_list.append(beats_in_bar)
 
 time_signature = int(np.median(beats_per_bar_list)) if beats_per_bar_list else 4
-bar1_end = bars[0]["end"] if bars else 0  # end of bar 1 — excluded from cuts
+bar1_end       = bars[0]["end"] if bars else 0
 
 print(f"    Time signature : {time_signature}/4")
 print(f"    Bars detected  : {len(bars)}")
 print(f"    Bar 1 ends at  : {bar1_end}s (excluded from cut candidates)")
 
 # ─────────────────────────────────────────────────
-# LAYER 1D — Subdivisions (from bar 2 onwards only)
+# STEP 4 — Energy curve (Librosa)
 # ─────────────────────────────────────────────────
-print("\n[4] Calculating subdivisions (bar 2 onwards)...")
-eighth_duration    = beat_duration / 2
-sixteenth_duration = beat_duration / 4
-
-subdivisions = []
-for bt in beat_times:
-    # SKIP bar 1
-    if bt < bar1_end:
-        continue
-
-    subdivisions.append({"time": bt, "type": "quarter"})
-
-    eighth = round(bt + eighth_duration, 3)
-    if eighth < duration:
-        subdivisions.append({"time": eighth, "type": "eighth"})
-
-    s1 = round(bt + sixteenth_duration, 3)
-    s2 = round(bt + sixteenth_duration * 3, 3)
-    if s1 < duration:
-        subdivisions.append({"time": s1, "type": "sixteenth"})
-    if s2 < duration:
-        subdivisions.append({"time": s2, "type": "sixteenth"})
-
-subdivisions.sort(key=lambda x: x["time"])
-print(f"    Subdivision points: {len(subdivisions)}")
-
-# ─────────────────────────────────────────────────
-# LAYER 2A — Energy curve (Librosa)
-# ─────────────────────────────────────────────────
-print("\n[5] Analyzing energy curve...")
-rms = librosa.feature.rms(y=y)[0]
+print("\n[4] Analyzing energy curve...")
+rms       = librosa.feature.rms(y=y)[0]
 rms_times = librosa.frames_to_time(np.arange(len(rms)), sr=sr)
 
 rms_min  = float(rms.min())
@@ -131,8 +107,8 @@ rms_normalized = [
 ]
 
 # Climax — highest sustained energy (smoothed window)
-window = 20
-smoothed = np.convolve(rms_normalized, np.ones(window)/window, mode='same')
+window      = 20
+smoothed    = np.convolve(rms_normalized, np.ones(window)/window, mode='same')
 climax_idx  = int(np.argmax(smoothed))
 climax_time = round(float(rms_times[climax_idx]), 3)
 print(f"    Energy range : {round(rms_min,4)} → {round(rms_max,4)}")
@@ -140,38 +116,41 @@ print(f"    Climax at    : {climax_time}s "
       f"({round(climax_time/duration*100)}% through track)")
 
 # ─────────────────────────────────────────────────
-# LAYER 2B — Onset strength (Librosa)
+# STEP 5 — Onset strength (Librosa)
 # ─────────────────────────────────────────────────
-print("\n[6] Measuring onset strength...")
+print("\n[5] Calculating onset strength...")
 onset_env   = librosa.onset.onset_strength(y=y, sr=sr)
 onset_times = librosa.frames_to_time(np.arange(len(onset_env)), sr=sr)
 onset_min   = float(onset_env.min())
 onset_max   = float(onset_env.max())
+print(f"    Onset range  : {round(onset_min,4)} → {round(onset_max,4)}")
 
+# ─────────────────────────────────────────────────
+# STEP 6 — Helper functions
+# ─────────────────────────────────────────────────
 def get_onset_strength(t):
+    """Normalized onset strength (0-100) at time t."""
     idx = int(np.argmin(np.abs(onset_times - t)))
     raw = float(onset_env[idx])
     return round((raw - onset_min) / (onset_max - onset_min) * 100, 2)
 
 def get_energy_at(t):
+    """Normalized RMS energy (0-100) at time t."""
     idx = int(np.argmin(np.abs(rms_times - t)))
     return round(rms_normalized[idx], 2)
 
-# ─────────────────────────────────────────────────
-# LAYER 3 — Scoring (FIXED)
-# ─────────────────────────────────────────────────
-print("\n[7] Scoring accent points (v1.1 rules)...")
+def is_downbeat(t, downbeats, tolerance=0.05):
+    """True only if time t matches a detected downbeat within 50ms."""
+    return any(abs(t - dt) < tolerance for dt in downbeats)
 
-def get_bar_position_weight(t, downbeats, beat_times, time_sig, onset_at_t, climax_t, duration):
+def get_bar_position_weight(t, downbeats, beat_times, time_sig,
+                             onset_at_t, climax_t, duration):
     """
-    FIX v1.1:
-    - Downbeat = 100 ONLY if onset is strong (>40) OR near climax
-    - Plain weak-onset downbeat = max 40
-    - Beat 3 in 4/4 = 50
-    - Weak beats = 25
-    - Subdivisions = 10
+    Bar position weight based on beat position within bar.
+    Downbeat = 100 only if onset strong (>40) OR near climax.
+    Plain weak-onset downbeat = 40.
+    Beat 3 in 4/4 = 50. Weak beats = 25. Subdivisions = 10.
     """
-    # Find bar this time falls in
     bar_idx = None
     for i in range(len(downbeats)):
         bar_end = downbeats[i+1] if i+1 < len(downbeats) else float('inf')
@@ -190,53 +169,87 @@ def get_bar_position_weight(t, downbeats, beat_times, time_sig, onset_at_t, clim
     if not bar_beats:
         return 10
 
-    near_climax = abs(t - climax_t) < (duration * 0.1)  # within 10% of track
+    near_climax = abs(t - climax_t) < (duration * 0.1)
 
     for beat_pos, bt in enumerate(bar_beats):
-        if abs(t - bt) < 0.05:  # within 50ms of a beat
+        if abs(t - bt) < 0.05:
             if beat_pos == 0:
-                # Downbeat — FIX: strong onset OR near climax = 100, else 40
                 if onset_at_t > 40 or near_climax:
                     return 100
                 else:
                     return 40
             elif beat_pos == 2 and time_sig == 4:
-                return 50   # beat 3 in 4/4
+                return 50
             else:
-                return 25   # weak beat
-    return 10  # subdivision only
-
+                return 25
+    return 10
 
 def get_climax_bonus(t, climax_t, duration):
     """
-    FIX v1.1:
-    - Increased max bonus from 30 to 50
-    - Strongest bonus for the single closest point to climax
-    - Falls off more steeply with distance
+    Climax proximity bonus — max 50 points.
+    Active within 30% of track duration from climax.
+    Falls off with distance.
     """
-    distance = abs(t - climax_t)
-    max_distance = duration * 0.3  # bonus active within 30% of track
+    distance     = abs(t - climax_t)
+    max_distance = duration * 0.3
     if distance > max_distance:
         return 0.0
-    # Inverse distance — closer = higher bonus
     bonus = (1 - (distance / max_distance)) * 50
     return round(bonus, 2)
 
+# ─────────────────────────────────────────────────
+# STEP 7 — Generate subdivisions (bar 2 onwards)
+# ─────────────────────────────────────────────────
+print("\n[7] Generating subdivisions (bar 2 onwards)...")
+eighth_duration    = beat_duration / 2
+sixteenth_duration = beat_duration / 4
+
+subdivisions = []
+for bt in beat_times:
+    # Skip bar 1
+    if bt < bar1_end:
+        continue
+
+    # Quarter notes — always included (structurally determined)
+    subdivisions.append({"time": bt, "type": "quarter"})
+
+    # Eighth notes — only where actual audio content exists
+    eighth = round(bt + eighth_duration, 3)
+    if eighth < duration:
+        if get_onset_strength(eighth) >= MIN_ONSET_THRESHOLD:
+            subdivisions.append({"time": eighth, "type": "eighth"})
+
+    # Sixteenth notes — only where actual audio content exists
+    s1 = round(bt + sixteenth_duration, 3)
+    s2 = round(bt + sixteenth_duration * 3, 3)
+    if s1 < duration:
+        if get_onset_strength(s1) >= MIN_ONSET_THRESHOLD:
+            subdivisions.append({"time": s1, "type": "sixteenth"})
+    if s2 < duration:
+        if get_onset_strength(s2) >= MIN_ONSET_THRESHOLD:
+            subdivisions.append({"time": s2, "type": "sixteenth"})
+
+subdivisions.sort(key=lambda x: x["time"])
+print(f"    Total subdivision points : {len(subdivisions)}")
+print(f"    (Quarter notes always included, eighth/sixteenth filtered by onset >= {MIN_ONSET_THRESHOLD})")
+
+# ─────────────────────────────────────────────────
+# STEP 8 — Score all subdivision points
+# ─────────────────────────────────────────────────
+print("\n[8] Scoring accent points...")
 
 scored_points = []
 for sub in subdivisions:
     t        = sub["time"]
     sub_type = sub["type"]
 
-    onset    = get_onset_strength(t)
-    energy   = get_energy_at(t)
-    bar_wt   = get_bar_position_weight(
-        t, downbeats, beat_times, time_signature,
-        onset, climax_time, duration
-    )
+    onset        = get_onset_strength(t)
+    energy       = get_energy_at(t)
+    bar_wt       = get_bar_position_weight(
+                       t, downbeats, beat_times, time_signature,
+                       onset, climax_time, duration)
     climax_bonus = get_climax_bonus(t, climax_time, duration)
 
-    # Combined score — all relative to track's own range
     score = round(
         (onset        * 0.35) +
         (energy       * 0.20) +
@@ -246,13 +259,13 @@ for sub in subdivisions:
     )
 
     scored_points.append({
-        "time":               t,
-        "type":               sub_type,
-        "score":              score,
-        "onset_strength":     onset,
-        "energy":             energy,
+        "time":                t,
+        "type":                sub_type,
+        "score":               score,
+        "onset_strength":      onset,
+        "energy":              energy,
         "bar_position_weight": bar_wt,
-        "climax_bonus":       climax_bonus
+        "climax_bonus":        climax_bonus
     })
 
 scored_points.sort(key=lambda x: x["score"], reverse=True)
@@ -266,13 +279,9 @@ for p in scored_points[:5]:
           f"climax_bonus {p['climax_bonus']})")
 
 # ─────────────────────────────────────────────────
-# LAYER 4 — Accent map + sync plans
+# STEP 9 — Build prioritized accent map
 # ─────────────────────────────────────────────────
-print("\n[8] Building prioritized accent map...")
-
-def is_downbeat(t, downbeats, tolerance=0.05):
-    """True only if time t matches a detected downbeat within 50ms."""
-    return any(abs(t - dt) < tolerance for dt in downbeats)
+print("\n[9] Building prioritized accent map...")
 
 primary_candidates = [
     p for p in scored_points
@@ -283,46 +292,41 @@ secondary_candidates = [
     if not is_downbeat(p["time"], downbeats)
 ]
 
-print(f"    Primary   (quarter notes) : {len(primary_candidates)}")
-print(f"    Secondary (subdivisions)  : {len(secondary_candidates)}")
+print(f"    Primary   (downbeats only) : {len(primary_candidates)}")
+print(f"    Secondary (subdivisions)   : {len(secondary_candidates)}")
 
 # ─────────────────────────────────────────────────
-# Sync plans per photo count
+# STEP 10 — Generate sync plans (2-8 photos)
 # ─────────────────────────────────────────────────
-print("\n[9] Generating sync plans for 2-8 photos...")
+print("\n[10] Generating sync plans for 2-8 photos...")
 
 def select_cut_points(candidates, n_cuts, duration, climax_time, min_gap=1.5):
     """
-    Select n_cuts points following v1.1 rules:
-    - Always include climax (or closest point to it)
+    Select n_cuts downbeat points following sync rules:
+    - Always include climax downbeat
     - No cuts in bar 1 (already excluded from candidates)
-    - For 2 photos: climax IS the cut point
+    - For 2 photos: climax IS the only cut
     - Fill remaining by score with minimum gap
     - No cut in last 15% of track
     """
     selected   = []
     used_times = set()
-    track_end_limit = duration * 0.85  # no cuts in last 15%
+    end_limit  = duration * 0.85
 
-    # Filter out points too close to end
-    valid = [p for p in candidates if p["time"] <= track_end_limit]
+    valid = [p for p in candidates if p["time"] <= end_limit]
 
-    # Rule 1: Always include climax point (closest valid point to climax)
-    climax_candidates = sorted(
-        valid,
-        key=lambda x: abs(x["time"] - climax_time)
-    )
+    # Rule 1: Always include climax point
+    climax_candidates = sorted(valid, key=lambda x: abs(x["time"] - climax_time))
     if climax_candidates:
         best_climax = climax_candidates[0]
         selected.append(best_climax)
         used_times.add(best_climax["time"])
 
     if n_cuts == 1:
-        # 2 photos: climax IS the only cut — done
         return sorted(selected, key=lambda x: x["time"])
 
-    # Rule 2: For 3+ photos add strong early point (bar 2-3 area)
-    early_limit = duration * 0.35
+    # Rule 2: Add strong early point (first 35% of track)
+    early_limit      = duration * 0.35
     early_candidates = [
         p for p in valid
         if p["time"] <= early_limit
@@ -358,38 +362,41 @@ for n_photos in range(2, 9):
         primary_candidates, n_cuts, duration, climax_time, min_gap
     )
 
-    cut_times = {p["time"] for p in cut_points}
+    cut_times     = {p["time"] for p in cut_points}
     effect_points = [
         p for p in secondary_candidates
         if not any(abs(p["time"] - ct) < 0.1 for ct in cut_times)
     ][:20]
 
     sync_plans[str(n_photos)] = {
-        "n_photos":     n_photos,
-        "n_cuts":       len(cut_points),
-        "cut_points":   [{"time": p["time"], "score": p["score"]} for p in cut_points],
-        "effect_points":[{"time": p["time"], "score": p["score"],
-                         "type": p["type"]} for p in effect_points]
+        "n_photos":      n_photos,
+        "n_cuts":        len(cut_points),
+        "cut_points":    [{"time": p["time"], "score": p["score"]}
+                          for p in cut_points],
+        "effect_points": [{"time": p["time"], "score": p["score"],
+                           "type": p["type"]}
+                          for p in effect_points]
     }
 
     cuts_str = [str(p["time"]) for p in cut_points]
     print(f"    {n_photos} photos → {len(cut_points)} cut(s) at: {', '.join(cuts_str)}s")
 
 # ─────────────────────────────────────────────────
-# SAVE
+# STEP 11 — Save complete analysis
 # ─────────────────────────────────────────────────
-print("\n[10] Saving analysis...")
+print("\n[11] Saving analysis...")
 
 result = {
-    "version":        "1.1",
-    "file":           os.path.basename(TRACK),
-    "duration":       round(duration, 3),
-    "bpm":            bpm,
-    "beat_duration":  beat_duration,
-    "time_signature": f"{time_signature}/4",
-    "climax_time":    climax_time,
-    "bar1_excluded":  True,
-    "bar1_end":       bar1_end,
+    "version":         "1.2",
+    "file":            os.path.basename(TRACK),
+    "duration":        round(duration, 3),
+    "bpm":             bpm,
+    "beat_duration":   beat_duration,
+    "time_signature":  f"{time_signature}/4",
+    "climax_time":     climax_time,
+    "bar1_excluded":   True,
+    "bar1_end":        bar1_end,
+    "min_onset_threshold": MIN_ONSET_THRESHOLD,
     "track_range": {
         "energy_min":  round(rms_min, 4),
         "energy_max":  round(rms_max, 4),
@@ -397,8 +404,8 @@ result = {
         "onset_min":   round(onset_min, 4),
         "onset_max":   round(onset_max, 4)
     },
-    "bars":      bars,
-    "downbeats": downbeats,
+    "bars":       bars,
+    "downbeats":  downbeats,
     "beat_times": beat_times,
     "rms_curve": {
         "times":  [round(float(t), 3) for t in rms_times.tolist()],
@@ -416,5 +423,5 @@ with open(OUTPUT, "w") as f:
 
 print(f"    Saved: energetic_01_analysis.json")
 print("\n" + "═"*50)
-print("  ✓ Analysis complete v1.1")
+print("  ✓ Analysis complete v1.2")
 print("═"*50 + "\n")
