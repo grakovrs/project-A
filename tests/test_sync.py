@@ -30,11 +30,11 @@ section_start = 0  # use full track for now
 extensions = ("*.jpg", "*.jpeg", "*.png", "*.JPG", "*.JPEG", "*.PNG")
 photos = []
 for ext in extensions:
-        photos.extend(glob.glob(os.path.join(PHOTOS_DIR, ext)))
+    photos.extend(glob.glob(os.path.join(PHOTOS_DIR, ext)))
 photos = sorted(photos)
 
 if len(photos) < 2:
-      print("❌ Need at least 2 photos in ~/Documents/advids/photos/")
+    print("❌ Need at least 2 photos in ~/Documents/advids/photos/")
     exit()
 
 print(f"\n{'═'*50}")
