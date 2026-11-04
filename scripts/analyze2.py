@@ -18,8 +18,16 @@ MIN_ONSET_THRESHOLD = 3.0   # 0-100 normalized
 # Attack time tolerance — window to match beat position with RMS peak
 ATTACK_TOLERANCE = 0.05     # 50ms
 
+# Secondary point RMS threshold — only peaks at or above this % of track max RMS
+# are kept as secondary points. Filters out low-energy noise in sustained sections.
+RMS_SECONDARY_THRESHOLD = 30.0  # 30% of normalized max (0-100 scale)
+
+# Minimum energy for any secondary point in accent_map output (post-scoring gate).
+# Blocks climax_bonus from inflating low-energy beat positions into secondaries.
+SECONDARY_ENERGY_GATE = 30.0   # same as RMS_SECONDARY_THRESHOLD
+
 print("\n" + "═"*50)
-print("  AdVids — Deep Track Analysis v1.3")
+print("  AdVids — Deep Track Analysis v1.5")
 print("═"*50)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -217,8 +225,9 @@ sixteenth_duration = beat_duration / 4
 def find_rms_peaks_between(t_start, t_end):
     """
     Find local onset peaks between t_start and t_end.
-    A peak is a point where onset_strength is locally maximum
-    and above MIN_ONSET_THRESHOLD.
+    A peak is a point where onset_strength is locally maximum,
+    above MIN_ONSET_THRESHOLD, AND the RMS energy at that point
+    is at or above RMS_SECONDARY_THRESHOLD (% of track max).
     Returns list of peak times.
     """
     mask = (onset_times >= t_start) & (onset_times < t_end)
@@ -232,13 +241,18 @@ def find_rms_peaks_between(t_start, t_end):
         return []
 
     peaks = []
-    for i in range(1, len(local_onsets) - 1):
+    for i in range(2, len(local_onsets) - 2):
         if (local_onsets[i] > local_onsets[i-1] and
-                local_onsets[i] > local_onsets[i+1]):
+                local_onsets[i] > local_onsets[i+1] and
+                local_onsets[i] > local_onsets[i-2] and
+                local_onsets[i] > local_onsets[i+2]):
             raw_onset  = float(local_onsets[i])
             normalized = (raw_onset - onset_min) / (onset_max - onset_min) * 100
             if normalized >= MIN_ONSET_THRESHOLD:
-                peaks.append(round(float(local_times[i]), 3))
+                # RMS threshold: skip low-energy micro-peaks
+                rms_at_peak = get_energy_at(float(local_times[i]))
+                if rms_at_peak >= RMS_SECONDARY_THRESHOLD:
+                    peaks.append(round(float(local_times[i]), 3))
     return peaks
 
 
@@ -284,6 +298,10 @@ for i, db in enumerate(downbeats):
     # Assign HIGH or MEDIUM to each beat position
     for bp in beat_positions:
         if bp >= duration:
+            continue
+
+        # Skip beat positions too close to any downbeat (avoids duplicates)
+        if any(abs(bp - dbt) <= ATTACK_TOLERANCE for dbt in downbeats):
             continue
 
         onset_at_bp = get_onset_strength(bp)
@@ -397,15 +415,18 @@ print("\n[9] Building prioritized accent map...")
 
 primary_candidates = [
     p for p in scored_points
-    if is_downbeat(p["time"], downbeats)
+    if p["confidence"] == "primary"
 ]
 
 # Secondary: non-downbeats, HIGH and MEDIUM confidence only (for effect placement)
-# LOW confidence kept in JSON for analysis but excluded from effect candidates
+# LOW confidence kept in JSON for analysis but excluded from effect candidates.
+# Energy gate applied AFTER scoring — blocks climax_bonus from inflating
+# low-energy beat positions (valleys, decays) into secondary candidates.
 secondary_candidates = [
     p for p in scored_points
     if not is_downbeat(p["time"], downbeats)
     and p["confidence"] in ("high", "medium")
+    and p["energy"] >= SECONDARY_ENERGY_GATE
 ]
 
 secondary_low = [
@@ -516,7 +537,7 @@ for n_photos in range(2, 9):
 print("\n[11] Saving analysis...")
 
 result = {
-    "version":         "1.3",
+    "version":         "1.5",
     "file":            os.path.basename(TRACK),
     "duration":        round(duration, 3),
     "bpm":             bpm,
@@ -525,8 +546,10 @@ result = {
     "climax_time":     climax_time,
     "bar1_excluded":   True,
     "bar1_end":        bar1_end,
-    "min_onset_threshold": MIN_ONSET_THRESHOLD,
-    "attack_tolerance":    ATTACK_TOLERANCE,
+    "min_onset_threshold":    MIN_ONSET_THRESHOLD,
+    "attack_tolerance":       ATTACK_TOLERANCE,
+    "rms_secondary_threshold": RMS_SECONDARY_THRESHOLD,
+    "secondary_energy_gate":   SECONDARY_ENERGY_GATE,
     "track_range": {
         "energy_min":  round(rms_min, 4),
         "energy_max":  round(rms_max, 4),
@@ -558,5 +581,5 @@ with open(OUTPUT, "w") as f:
 
 print(f"    Saved: energetic_01_analysis.json")
 print("\n" + "═"*50)
-print("  ✓ Analysis complete v1.3")
+print("  ✓ Analysis complete v1.5")
 print("═"*50 + "\n")

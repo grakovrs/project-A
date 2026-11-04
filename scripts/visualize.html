@@ -13,7 +13,7 @@
     --muted: #7070a0;
     --acid: #c8ff00;
     --red: #ff5566;
-    --blue: #66aaff;
+    --blue: #00cfff;
     --orange: #ffaa33;
     --purple: #cc66ff;
     --white: #ffffff;
@@ -641,10 +641,10 @@
     // ── SECONDARY ACCENT POINTS
     data.accent_map.secondary.slice(0, 80).forEach(p => {
       const x = tx(p.time);
-      const y = Math.max(ty(p.score * 1.5), PT + 4);
+      const y = Math.max(ty(p.energy), PT + 4);
       ctx.beginPath();
-      ctx.arc(x, y, 2.5, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(102,170,255,0.4)';
+      ctx.arc(x, y, 4, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0,207,255,0.75)';
       ctx.fill();
     });
 
